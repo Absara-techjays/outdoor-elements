@@ -170,12 +170,19 @@ def _has_material_tags(pdf, page: int, cfg: dict) -> bool:
 
 
 @shared_task(name="stage2_detect")
-def stage2_detect(job_id: str, page: int) -> dict:
+def stage2_detect(job_id: str, page: int, force: bool = False) -> dict:
     """Detect & color the surface regions on one page (Stage 2). Celery entry."""
-    return run_stage2(job_id, page)
+    return run_stage2(job_id, page, force)
 
 
-def run_stage2(job_id: str, page: int) -> dict:
+def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
+    # Resume-safe: never re-detect over an already-completed page unless forced —
+    # re-detection re-seeds the zones table and would wipe the user's edits. The
+    # saved result already reflects every edit (each edit re-renders it).
+    if not force:
+        existing = store.read_stage2(job_id, page)
+        if existing and existing.get("status") == "done":
+            return existing
     pdf = store.pdf_path(job_id)
     status = {"job_id": job_id, "page": page, "status": "running"}
     store.write_stage2(job_id, page, status)

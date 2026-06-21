@@ -165,14 +165,21 @@ def page_preview(job_id: str, index: int) -> FileResponse:
 
 # ---------- Stage 2: detect & color surface regions on a page ----------
 @app.post("/api/jobs/{job_id}/stage2/{page}")
-def start_stage2(job_id: str, page: int, background: BackgroundTasks) -> dict:
+def start_stage2(job_id: str, page: int, background: BackgroundTasks,
+                 force: bool = False) -> dict:
     if not store.pdf_path(job_id).exists():
         raise HTTPException(status_code=404, detail="Unknown job id.")
+    # Resume-safe: if this page was already detected (and possibly edited), do NOT
+    # re-detect — that would wipe the user's zone deletions. Return the saved
+    # result (the frontend polls GET). Pass ?force=true to deliberately re-detect.
+    existing = store.read_stage2(job_id, page)
+    if not force and existing and existing.get("status") == "done":
+        return {"job_id": job_id, "page": page, "eager": EAGER, "cached": True}
     store.write_stage2(job_id, page, {"job_id": job_id, "page": page, "status": "queued"})
     if EAGER:
-        background.add_task(run_stage2, job_id, page)
+        background.add_task(run_stage2, job_id, page, force)
     else:
-        stage2_detect.delay(job_id, page)
+        stage2_detect.delay(job_id, page, force)
     return {"job_id": job_id, "page": page, "eager": EAGER}
 
 
