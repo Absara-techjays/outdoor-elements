@@ -31,15 +31,16 @@ KEEP_TITLE = [
     "MATERIAL PLAN", "MATERIALS PLAN", "HARDSCAPE PLAN",
     "PLANTING PLAN", "LANDSCAPE PLAN", "REFERENCE PLAN",
 ]
-# Other takeoff plan types (pool / spa / planter / paving). Often monochrome, so
-# these are kept on the title alone — no legend-color requirement.
+# Other landscape takeoff plan types kept on the title alone (often monochrome).
+# NOTE: pool/spa/aquatic are a SEPARATE trade — the human landscape QTO excludes
+# them (confirmed with the client on Alma: 10 sheets, not 11), so they are DROPPED.
 OTHER_PLAN_TITLE = [
-    "POOL PLAN", "SPA PLAN", "POOL & SPA", "POOL AND SPA", "AQUATIC",
-    "PLANTER PLAN", "PAVING PLAN", "PAVING & ",
+    "PLANTER PLAN", "PAVING PLAN", "PAVING & ", "SITE PLAN",
 ]
 DROP_TITLE = [
     "DETAIL", "SECTION", "ELEVATION", "GENERAL NOTES", "GRADING PLAN",
     "DRAINAGE PLAN", "LIGHTING PLAN", "IRRIGATION", "OVERALL", "KEY PLAN",
+    "POOL PLAN", "SPA PLAN", "POOL & SPA", "POOL AND SPA", "AQUATIC",
 ]
 
 _CODE_RE = re.compile(r"^[A-Z]{1,3}\d\.\d{1,2}$")
