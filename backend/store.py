@@ -84,6 +84,24 @@ def write_status(job_id: str, data: dict) -> None:
         job.filename = data.get("filename") or job.filename
 
 
+def set_content_hash(job_id: str, content_hash: str) -> None:
+    """Record the SHA-256 of the uploaded PDF so the same file resumes its job."""
+    with db.session() as s:
+        _get_or_create(s, job_id).content_hash = content_hash
+
+
+def find_job_by_hash(content_hash: str) -> str | None:
+    """Return the most recent job_id for this exact PDF content, or None."""
+    if not content_hash:
+        return None
+    with db.session() as s:
+        job = (s.query(db.Job)
+               .filter(db.Job.content_hash == content_hash)
+               .order_by(db.Job.created_at.desc())
+               .first())
+        return job.job_id if job else None
+
+
 def read_status(job_id: str) -> dict | None:
     with db.session() as s:
         job = s.get(db.Job, job_id)

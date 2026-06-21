@@ -34,6 +34,8 @@ class Job(Base):
     __tablename__ = "jobs"
     job_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True,
+                                                     index=True)  # SHA-256 of the PDF bytes
     status: Mapped[dict | None] = mapped_column(_Json, nullable=True)   # status.json
     config: Mapped[dict | None] = mapped_column(_Json, nullable=True)   # config.json
     prices: Mapped[dict | None] = mapped_column(_Json, nullable=True)   # prices.json
@@ -87,6 +89,14 @@ def init_db() -> None:
     """Create tables if missing (idempotent)."""
     global _ready
     Base.metadata.create_all(engine)
+    # create_all won't add columns to an already-existing table, so patch in
+    # content_hash for pre-existing Postgres DBs (no-op on a fresh DB / SQLite).
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)")
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_jobs_content_hash ON jobs (content_hash)")
     _ready = True
 
 

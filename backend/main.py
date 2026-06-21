@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 
 from pydantic import BaseModel
 
+import hashlib
 import os
 import secrets
 
@@ -81,9 +82,21 @@ async def upload(background: BackgroundTasks, file: UploadFile = File(...)) -> U
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a .pdf file.")
 
+    data = await file.read()
+    content_hash = hashlib.sha256(data).hexdigest()
+
+    # Same PDF uploaded before? Resume that job so its saved edits/deletions and
+    # already-computed pages/zones come back instead of starting from scratch.
+    existing = store.find_job_by_hash(content_hash)
+    if existing and store.pdf_path(existing).exists():
+        st = store.read_status(existing) or {}
+        return UploadResponse(job_id=existing, eager=EAGER, resumed=True,
+                              filename=st.get("filename") or file.filename)
+
     job_id = store.new_job_id()
-    store.pdf_path(job_id).write_bytes(await file.read())
+    store.pdf_path(job_id).write_bytes(data)
     store.write_status(job_id, {"job_id": job_id, "filename": file.filename, "status": "queued"})
+    store.set_content_hash(job_id, content_hash)
 
     # Dispatch Stage 1 (page selection) + Gemini auto-config WITHOUT blocking.
     # No Redis -> background threads; Redis up -> Celery workers.

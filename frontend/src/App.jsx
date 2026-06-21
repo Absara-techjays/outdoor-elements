@@ -50,6 +50,7 @@ export default function App({ onLogout }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [eager, setEager] = useState(null);
+  const [resumed, setResumed] = useState(false);  // re-uploaded the same PDF -> resumed prior job
   const [preview, setPreview] = useState(null); // {index, sheet, title} or null
   const [view, setView] = useState("stage1");   // "stage1" | "stage2"
   const [s2, setS2] = useState(null);           // stage 2 status/result
@@ -190,6 +191,7 @@ export default function App({ onLogout }) {
     try {
       const up = await uploadPdf(file);
       setEager(up.eager);
+      setResumed(!!up.resumed);
       await pollJob(up.job_id, (j) => setJob({ ...j, job_id: up.job_id }));
     } catch (e) {
       setError(e.message);
@@ -283,6 +285,12 @@ export default function App({ onLogout }) {
 
       {job?.status === "done" && view === "stage1" && (
         <section className="results">
+          {resumed && (
+            <div className="resumed-banner">
+              <span className="material-symbols-outlined">history</span>
+              Resumed your previous session for this PDF — your earlier edits are kept.
+            </div>
+          )}
           <div className="summary">
             <strong>{job.filename}</strong> — {job.page_count} pages →{" "}
             <span className="kept-badge">{job.kept_count} required</span>
@@ -536,7 +544,6 @@ export default function App({ onLogout }) {
       {job?.status === "done" && view === "stage3" && (
         <section className="results">
           <div className="s2bar">
-            <button className="secondary" onClick={() => setView("stage2")}>← Back to Stage 2</button>
             <span className="muted">Stage 3 · measure square footage · our output vs human QTO</span>
           </div>
 

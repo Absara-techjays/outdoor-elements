@@ -466,6 +466,14 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
 .logout-btn:hover { background: var(--surface-alt); color: var(--text); }
 .logout-btn .material-symbols-outlined { font-size: 18px; }
 
+.resumed-banner {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface-tint); color: var(--text);
+  border: 1px solid var(--primary); border-radius: 8px;
+  padding: 8px 12px; font-size: 13px; margin-bottom: 12px;
+}
+.resumed-banner .material-symbols-outlined { font-size: 18px; color: var(--primary); }
+
 /* ── interactive zone overlay (Stage 2 editor) ────────────────────────── */
 .s2img { position: relative; }
 .zone-svg {
