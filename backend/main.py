@@ -226,11 +226,39 @@ def undo_edit(job_id: str, page: int) -> dict:
     return undo_last(job_id, page)
 
 
-# ---------- Per-zone addressing: list / delete-by-id / restore ----------
+# ---------- Per-zone addressing: list / delete-by-id / batch / restore ----------
+def _page_size(job_id: str, page: int) -> dict | None:
+    """Base-page size in PDF points (for the interactive SVG overlay viewBox)."""
+    pdf = store.pdf_path(job_id)
+    if not pdf.exists():
+        return None
+    import fitz
+    doc = fitz.open(pdf)
+    try:
+        r = doc[page].rect
+        return {"width": r.width, "height": r.height}
+    finally:
+        doc.close()
+
+
 @app.get("/api/jobs/{job_id}/stage2/{page}/zones")
 def list_zones(job_id: str, page: int, include_deleted: bool = False) -> dict:
-    """All zones for a page, each with its stable id (for select + delete)."""
-    return {"zones": store.list_zones(job_id, page, include_deleted=include_deleted)}
+    """All zones for a page (each with its stable id + polygon geometry) plus the
+    base-page size, so the frontend can draw an interactive SVG overlay."""
+    return {"zones": store.list_zones(job_id, page, include_deleted=include_deleted),
+            "page": _page_size(job_id, page)}
+
+
+class ZoneIds(BaseModel):
+    ids: list[str]
+
+
+@app.post("/api/jobs/{job_id}/stage2/{page}/zones/delete_batch")
+def delete_zones_batch(job_id: str, page: int, body: ZoneIds) -> dict:
+    """Soft-delete several zones by id in one pass (one re-render). For the
+    marquee / multi-select delete in the editor."""
+    from .tasks import delete_zones
+    return delete_zones(job_id, page, body.ids)
 
 
 @app.get("/api/jobs/{job_id}/zones/{zone_id}")

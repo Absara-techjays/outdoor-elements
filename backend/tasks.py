@@ -135,6 +135,33 @@ def run_stage1(job_id: str, filename: str) -> dict:
     return status
 
 
+def _auto_sheet_cfg(page) -> dict:
+    """Default per-sheet config for a B&W material plan that has no reviewed
+    config — so the lead's line-width zone engine still runs (crisp zones)
+    instead of the rounded label-seeding fallback. Scale is read from the sheet's
+    printed scale note."""
+    fpi = stage2.sheet_feet_per_inch(page, default=16.0)
+    return {
+        "sheet_id": "AUTO",
+        "title": "Material Plan",
+        "scale_in_per_ft": 1.0 / fpi,
+        "tag_pattern": r"^\(?M[-.]?(\d{1,2})\)?$",
+        "tag_numeric_only": True,
+        "clip": {"top": 0.05, "bottom": 0.92, "left": 0.0, "right": 0.80},
+        "phase1_min_zone_sf": 0,
+        "phase2_radius_ft": 24,
+    }
+
+
+def _has_material_tags(pdf, page: int, cfg: dict) -> bool:
+    """True if the page carries M.x material callout tags (what the engine needs)."""
+    import re
+    tag_re = re.compile(cfg["tag_pattern"], re.I)
+    tags = qto_engine.extract_tags(pdf, page, cfg["clip"], tag_re,
+                                   cfg.get("tag_numeric_only", True))
+    return len(tags) >= 2
+
+
 @shared_task(name="stage2_detect")
 def stage2_detect(job_id: str, page: int) -> dict:
     """Detect & color the surface regions on one page (Stage 2). Celery entry."""
@@ -158,6 +185,15 @@ def run_stage2(job_id: str, page: int) -> dict:
         chromatic = stage2._page_is_chromatic(page_obj)
         pool_targets = _load_pool_targets(job_id)
 
+        # A B&W material sheet with M.x tags but no reviewed config: build a
+        # default config so the lead's line-width engine runs (crisp zones)
+        # rather than the rounded label-seeding fallback.
+        auto_cfg = None
+        if not chromatic and not sheet_cfg:
+            _ac = _auto_sheet_cfg(page_obj)
+            if _has_material_tags(pdf, page, _ac):
+                auto_cfg = _ac
+
         if not chromatic and pool_targets and _is_pool_plan(page_obj):
             # Pool mode: estimate-guided pool/spa surface detection (raw B&W pool
             # sheet, no tags). Scale auto-calibrated from the estimate targets.
@@ -177,21 +213,25 @@ def run_stage2(job_id: str, page: int) -> dict:
                          f"(scale 1/{1/res['scale_in_per_ft']:.1f}\" = 1')"),
                 groups=groups,
             )
-        elif sheet_cfg and not chromatic:
+        elif not chromatic and (sheet_cfg or auto_cfg):
             # Engine path: line-width zones + connected components (the lead's method).
+            # Use the reviewed per-sheet config when available, else the auto config.
             # Seed per-zone rows, then render the overlay + totals FROM the zones so
             # the initial view matches the (zone-based) editing model exactly.
-            res = qto_engine.run_sheet(pdf, page, sheet_cfg, out)
+            cfg2 = sheet_cfg or auto_cfg
+            res = qto_engine.run_sheet(pdf, page, cfg2, out)
             _persist_masks(job_id, page, res.get("masks", {}), res["scale_in_per_ft"])
             active = store.active_zones(job_id, page)
             zres = zones.render_from_zones(pdf, page, active, out)
             groups = zres["groups"]
-            sid = sheet_cfg["sheet_id"]
+            sid = cfg2["sheet_id"]
+            auto = sheet_cfg is None
             status.update(
                 status="done", overlay=f"overlay_p{page}.png", method="engine",
                 sheet=sid, scale_in_per_ft=res["scale_in_per_ft"],
-                message=(f"{sid} ({sheet_cfg['title']}) — {len(groups)} materials, "
-                         f"scale 1\" = {1/res['scale_in_per_ft']:.0f}' · line-width zone engine"),
+                message=(f"{sid} ({cfg2['title']}) — {len(groups)} materials, "
+                         f"scale 1\" = {1/res['scale_in_per_ft']:.0f}'"
+                         f"{' (auto)' if auto else ''} · line-width zone engine"),
                 groups=groups,
                 comparison=legend_comparison(_open_page(pdf, page), groups),
                 validation=_build_validation(sid, res["areas"]),
@@ -326,6 +366,19 @@ def delete_zone(job_id: str, zone_id: str) -> dict:
         return {"error": "unknown zone id"}
     return _rerender_from_zones(info["job_id"], info["page"],
                                 f"Removed zone {zone_id[:8]} ({info['code']}).", [zone_id])
+
+
+def delete_zones(job_id: str, page: int, ids: list[str]) -> dict:
+    """Soft-delete a set of zones by id in one pass, then re-render once."""
+    deleted = []
+    for zid in ids:
+        if store.set_zone_status(zid, "deleted") is not None:
+            deleted.append(zid)
+    if not deleted:
+        s = store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
+        s["edit_note"] = "Nothing to remove."
+        return s
+    return _rerender_from_zones(job_id, page, f"Removed {len(deleted)} zone(s).", deleted)
 
 
 def restore_zone(job_id: str, zone_id: str) -> dict:
