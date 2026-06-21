@@ -3,15 +3,47 @@ import {
   uploadPdf, pollJob, thumbUrl, previewUrl,
   startStage2, pollStage2, stage2OverlayUrl,
   getConfig, editScale, getPricing, editRate,
-  pickZone, removeMaterial, undoEdit, removeBatch,
-  listZones, deleteZone, restoreZone,
+  removeMaterial, undoEdit,
+  listZones, deleteZone, restoreZone, deleteZonesBatch,
 } from "./api.js";
+import ZoneEditor from "./ZoneEditor.jsx";
 
 const STAGES = [
   { n: 1, name: "Upload & select pages", active: true },
   { n: 2, name: "Extract vector lines", active: false },
   { n: 3, name: "Measure square footage", active: false },
 ];
+
+// --- per-zone swatch colors -------------------------------------------------
+// Zones of one material share a base color; vary it per-zone (shade + slight hue
+// wobble) so the list reads as MIXED shades instead of one flat color.
+function hexToHsl(hex) {
+  let c = (hex || "#888888").replace("#", "");
+  if (c.length === 3) c = c.split("").map((x) => x + x).join("");
+  const r = parseInt(c.slice(0, 2), 16) / 255;
+  const g = parseInt(c.slice(2, 4), 16) / 255;
+  const b = parseInt(c.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  const l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (d) {
+    s = d / (1 - Math.abs(2 * l - 1));
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h = (h * 60 + 360) % 360;
+  }
+  return { h, s: s * 100, l: l * 100 };
+}
+function zoneShade(baseHex, i) {
+  const { h, s, l } = hexToHsl(baseHex);
+  const dl = [0, 16, -12, 26, -20, 8, 34, -6, 20, -14][i % 10]; // lightness spread
+  const dh = ((i % 3) - 1) * 9;                                  // small hue wobble
+  const L = Math.min(82, Math.max(30, l + dl));
+  const H = (h + dh + 360) % 360;
+  const S = Math.min(95, Math.max(42, s));
+  return `hsl(${H} ${S}% ${L}%)`;
+}
 
 export default function App({ onLogout }) {
   const [job, setJob] = useState(null);      // latest job status
@@ -23,27 +55,29 @@ export default function App({ onLogout }) {
   const [s2, setS2] = useState(null);           // stage 2 status/result
   const [s2page, setS2page] = useState(null);   // page index being detected
   const [config, setConfig] = useState(null);   // Gemini auto-config (reviewable)
-  const [editMode, setEditMode] = useState(false); // click-to-select on the overlay
-  const [picks, setPicks] = useState([]);    // selected zones [{code, area, bbox, fx, fy}]
+  const [editMode, setEditMode] = useState(false); // interactive select on the overlay
   const [pricing, setPricing] = useState(null);  // costed estimate for the page
   const [overlayKey, setOverlayKey] = useState(0); // cache-bust for the overlay image
-  const [zones, setZones] = useState([]);          // active zones (id-addressable)
+  const [zones, setZones] = useState([]);          // active zones (id-addressable + geometry)
   const [deletedZones, setDeletedZones] = useState([]); // soft-deleted zones
+  const [pageDims, setPageDims] = useState(null);  // base-page {width,height} for the SVG viewBox
   const [hoverZone, setHoverZone] = useState(null);     // zone id highlighted on the overlay
+  const [maskPolys, setMaskPolys] = useState([]);  // optimistically-erased regions (instant delete)
   const fileRef = useRef(null);
 
   async function loadZones(page = s2page) {
     if (!job?.job_id || page == null) return;
     try {
-      const all = await listZones(job.job_id, page, true);
+      const res = await listZones(job.job_id, page, true);
+      const all = res.zones || [];
       setZones(all.filter((z) => z.status === "active"));
       setDeletedZones(all.filter((z) => z.status === "deleted"));
+      setPageDims(res.page || null);
     } catch { /* zones unavailable for this detection path */ }
   }
 
   function afterEdit(updated) {
     setS2(updated);
-    setPicks([]);
     setPricing(null);  // quantities changed -> pricing is stale
     setOverlayKey((k) => k + 1);  // force the overlay <img> to reload the new render
     loadZones();
@@ -55,34 +89,45 @@ export default function App({ onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s2?.status, s2page]);
 
+  // Optimistic delete: drop the zones from the list, erase their regions on the
+  // overlay (white mask), and shave their area off the material totals — all
+  // instantly — then let the server re-render catch up in the background.
+  function optimisticRemove(ids) {
+    const idset = new Set(ids);
+    const gone = zones.filter((z) => idset.has(z.id));
+    if (!gone.length) return;
+    setZones((prev) => prev.filter((z) => !idset.has(z.id)));
+    setMaskPolys((prev) => [...prev, ...gone.flatMap((z) => z.geometry || [])]);
+    const lost = {};
+    for (const z of gone) lost[z.code] = (lost[z.code] || 0) + (z.area_sqft || 0);
+    setS2((prev) => prev && ({
+      ...prev,
+      groups: (prev.groups || []).map((g) =>
+        lost[g.label] ? { ...g, sqft: Math.max(0, (g.sqft || 0) - lost[g.label]) } : g),
+    }));
+  }
+  function rollback(e) { setError(e.message); setMaskPolys([]); loadZones(); }
+
   async function handleDeleteZone(id) {
+    optimisticRemove([id]);
     try { afterEdit(await deleteZone(job.job_id, id)); }
-    catch (e) { setError(e.message); }
+    catch (e) { rollback(e); }
   }
   async function handleRestoreZone(id) {
     try { afterEdit(await restoreZone(job.job_id, id)); }
     catch (e) { setError(e.message); }
   }
 
-  const inBox = (p, fx, fy) =>
-    fx >= p.bbox[0] && fx <= p.bbox[2] && fy >= p.bbox[1] && fy <= p.bbox[3];
-
-  async function handlePick(fx, fy) {
-    const hit = picks.findIndex((p) => inBox(p, fx, fy));
-    if (hit >= 0) { setPicks(picks.filter((_, i) => i !== hit)); return; } // toggle off
-    try {
-      const r = await pickZone(job.job_id, s2page, fx, fy);
-      if (r.code) setPicks((ps) => [...ps, { ...r, fx, fy }]);
-    } catch (e) { setError(e.message); }
-  }
-  async function deleteSelected() {
-    try {
-      afterEdit(await removeBatch(job.job_id, s2page, picks.map((p) => ({ x: p.fx, y: p.fy }))));
-    } catch (e) { setError(e.message); }
+  async function handleDeleteIds(ids) {
+    if (!ids || !ids.length) return;
+    optimisticRemove(ids);
+    try { afterEdit(await deleteZonesBatch(job.job_id, s2page, ids)); }
+    catch (e) { rollback(e); }
   }
   async function handleRemoveMaterial(code) {
+    optimisticRemove(zones.filter((z) => z.code === code).map((z) => z.id));
     try { afterEdit(await removeMaterial(job.job_id, s2page, code)); }
-    catch (e) { setError(e.message); }
+    catch (e) { rollback(e); }
   }
   async function handleUndo() {
     try { afterEdit(await undoEdit(job.job_id, s2page)); }
@@ -357,65 +402,22 @@ export default function App({ onLogout }) {
 
           {s2?.status === "done" && (
             <div className="s2grid">
-              <div className={`s2img ${editMode ? "editing" : ""}`}>
-                <img
-                  src={`${stage2OverlayUrl(job.job_id, s2page)}?v=${s2page}-${overlayKey}`}
-                  alt="detected surfaces"
-                  onClick={(e) => {
-                    if (!editMode) return;
-                    const r = e.currentTarget.getBoundingClientRect();
-                    handlePick((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
-                  }}
-                />
-                {editMode && picks.map((p, i) => (
-                  <div
-                    key={i} className="pick-box"
-                    style={{
-                      left: `${p.bbox[0] * 100}%`, top: `${p.bbox[1] * 100}%`,
-                      width: `${(p.bbox[2] - p.bbox[0]) * 100}%`,
-                      height: `${(p.bbox[3] - p.bbox[1]) * 100}%`,
-                    }}
-                  >
-                    <span className="pick-tag">{p.code}</span>
-                  </div>
-                ))}
-
-                {/* highlight the zone hovered in the Zones panel */}
-                {(() => {
-                  const z = zones.find((z) => z.id === hoverZone);
-                  if (!z || !z.bbox) return null;
-                  return (
-                    <div
-                      className="pick-box hover-box"
-                      style={{
-                        left: `${z.bbox[0] * 100}%`, top: `${z.bbox[1] * 100}%`,
-                        width: `${(z.bbox[2] - z.bbox[0]) * 100}%`,
-                        height: `${(z.bbox[3] - z.bbox[1]) * 100}%`,
-                      }}
-                    ><span className="pick-tag">{z.code}</span></div>
-                  );
-                })()}
-
-                {/* Vortex-style floating selection bar */}
-                {editMode && picks.length > 0 && (
-                  <div className="select-bar">
-                    <span className="sel-count">{picks.length} selected</span>
-                    <span className="sel-div" />
-                    <button className="sel-del" onClick={deleteSelected}>
-                      <span className="material-symbols-outlined">delete</span> Delete
-                    </button>
-                    <button className="sel-clr" onClick={() => setPicks([])}>
-                      <span className="material-symbols-outlined">close</span> Clear
-                    </button>
-                  </div>
-                )}
-              </div>
+              <ZoneEditor
+                imgUrl={`${stage2OverlayUrl(job.job_id, s2page)}?v=${s2page}-${overlayKey}`}
+                zones={zones}
+                page={pageDims}
+                editMode={editMode}
+                highlightId={hoverZone}
+                onDeleteIds={handleDeleteIds}
+                maskPolys={maskPolys}
+                onOverlayLoad={() => setMaskPolys([])}
+              />
 
               <div className="s2side">
                 <div className="edit-bar">
                   <button
                     className={`edit-toggle ${editMode ? "on" : ""}`}
-                    onClick={() => { setEditMode((v) => !v); setPicks([]); }}
+                    onClick={() => setEditMode((v) => !v)}
                   >
                     <span className="material-symbols-outlined">{editMode ? "check" : "edit"}</span>
                     {editMode ? "Edit mode" : "Edit"}
@@ -427,80 +429,91 @@ export default function App({ onLogout }) {
                 {editMode && <p className="muted edit-hint">Click zones to select (click again to deselect), then Delete. Or use the 🗑 on a material to drop all of it.</p>}
                 {s2.edit_note && <p className="edit-note">{s2.edit_note}</p>}
 
-                <div className="panel-head">
-                  <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">layers</span></span>
-                  <h3>Materials <span className="muted">({s2.groups?.length || 0})</span></h3>
-                </div>
-                {s2.message && <p className="muted s2msg">{s2.message}</p>}
-                {s2.groups?.length > 0 ? (
-                  <ul className="s2legend">
-                    {s2.groups.map((g) => (
-                      <li key={g.hex + (g.label || "")} className="matrow">
-                        <span className="swatch" style={{ background: g.hex }} />
-                        <code>{g.label || g.hex}</code>
-                        {g.sqft ? <span className="sqft">{g.sqft.toLocaleString()} sq ft</span> : null}
-                        {editMode && g.label && (
-                          <button
-                            className="trash" title={`Remove all ${g.label}`}
-                            aria-label={`Remove all ${g.label}`}
-                            onClick={() => handleRemoveMaterial(g.label)}
-                          ><span className="material-symbols-outlined">delete</span></button>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="muted">No colored surfaces on this page.</p>
-                )}
-                <p className="hint">Square footage measured from the vector geometry × the sheet scale.</p>
-
-                {(zones.length > 0 || deletedZones.length > 0) && (
-                  <div className="zones-block">
-                    <div className="panel-head">
-                      <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">grid_view</span></span>
-                      <h3>Zones <span className="muted">({zones.length})</span></h3>
-                    </div>
-                    <p className="hint">Each region is stored individually — select one to highlight it, delete it by id.</p>
-                    <ul className="zonelist">
-                      {zones.map((z) => (
-                        <li
-                          key={z.id} className={`zonerow ${hoverZone === z.id ? "hot" : ""}`}
-                          onMouseEnter={() => setHoverZone(z.id)}
-                          onMouseLeave={() => setHoverZone((h) => (h === z.id ? null : h))}
-                        >
-                          <span className="swatch" style={{ background: z.hex }} />
-                          <code>{z.code}</code>
-                          <span className="zid">#{z.id.slice(0, 6)}</span>
-                          {z.area_sqft ? <span className="sqft">{z.area_sqft.toLocaleString()} sq ft</span> : null}
-                          <button
-                            className="trash" title={`Delete zone ${z.id.slice(0, 6)}`}
-                            aria-label={`Delete zone ${z.id.slice(0, 6)}`}
-                            onClick={() => handleDeleteZone(z.id)}
-                          ><span className="material-symbols-outlined">delete</span></button>
-                        </li>
-                      ))}
-                    </ul>
-                    {deletedZones.length > 0 && (
-                      <details className="deleted-zones">
-                        <summary>Deleted ({deletedZones.length})</summary>
-                        <ul className="zonelist">
-                          {deletedZones.map((z) => (
-                            <li key={z.id} className="zonerow gone">
-                              <span className="swatch" style={{ background: z.hex }} />
-                              <code>{z.code}</code>
-                              <span className="zid">#{z.id.slice(0, 6)}</span>
-                              {z.area_sqft ? <span className="sqft">{z.area_sqft.toLocaleString()} sq ft</span> : null}
-                              <button
-                                className="ghost restore" title="Restore zone"
-                                onClick={() => handleRestoreZone(z.id)}
-                              ><span className="material-symbols-outlined">undo</span></button>
+                {(s2.groups?.length > 0 || zones.length > 0 || deletedZones.length > 0) ? (() => {
+                  // One combined column: each material is a header row with its total,
+                  // and its individual zones are nested beneath it (was two separate
+                  // "Materials" + "Zones" lists).
+                  const byCode = {};
+                  for (const z of zones) (byCode[z.code] ||= []).push(z);
+                  const groups = s2.groups || [];
+                  const seen = new Set(groups.map((g) => g.label));
+                  const extra = Object.keys(byCode)
+                    .filter((c) => !seen.has(c))
+                    .map((c) => ({ label: c, hex: byCode[c][0]?.hex, sqft: null }));
+                  const ordered = [...groups, ...extra];
+                  return (
+                    <div className="zones-block">
+                      <div className="panel-head">
+                        <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">layers</span></span>
+                        <h3>Surfaces <span className="muted">({zones.length} zones · {ordered.length} materials)</span></h3>
+                      </div>
+                      {s2.message && <p className="muted s2msg">{s2.message}</p>}
+                      <p className="hint">Each material rolls up its individual zones — hover a zone to highlight it, delete it by id. Square footage = vector geometry × the sheet scale.</p>
+                      {ordered.length > 0 ? (
+                        <ul className="surflist">
+                          {ordered.map((g) => (
+                            <li key={g.label || g.hex} className="matgroup">
+                              <div className="matrow">
+                                <span className="swatch" style={{ background: g.hex }} />
+                                <code>{g.label || g.hex}</code>
+                                {g.sqft != null
+                                  ? <span className="sqft">{g.sqft.toLocaleString()} sq ft</span>
+                                  : <span className="sqft muted">—</span>}
+                                {editMode && g.label && (
+                                  <button
+                                    className="trash" title={`Remove all ${g.label}`}
+                                    aria-label={`Remove all ${g.label}`}
+                                    onClick={() => handleRemoveMaterial(g.label)}
+                                  ><span className="material-symbols-outlined">delete</span></button>
+                                )}
+                              </div>
+                              {(byCode[g.label] || []).length > 0 && (
+                                <ul className="zonelist nested">
+                                  {(byCode[g.label] || []).map((z, zi) => (
+                                    <li
+                                      key={z.id} className={`zonerow ${hoverZone === z.id ? "hot" : ""}`}
+                                      onMouseEnter={() => setHoverZone(z.id)}
+                                      onMouseLeave={() => setHoverZone((h) => (h === z.id ? null : h))}
+                                    >
+                                      <span className="swatch" style={{ background: zoneShade(z.hex || g.hex, zi) }} />
+                                      {z.area_sqft ? <span className="sqft">{z.area_sqft.toLocaleString()} sq ft</span> : null}
+                                      <button
+                                        className="trash" title={`Delete zone ${z.id.slice(0, 6)}`}
+                                        aria-label={`Delete zone ${z.id.slice(0, 6)}`}
+                                        onClick={() => handleDeleteZone(z.id)}
+                                      ><span className="material-symbols-outlined">delete</span></button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
                             </li>
                           ))}
                         </ul>
-                      </details>
-                    )}
-                  </div>
-                )}
+                      ) : (
+                        <p className="muted">No colored surfaces on this page.</p>
+                      )}
+                      {deletedZones.length > 0 && (
+                        <details className="deleted-zones">
+                          <summary>Deleted ({deletedZones.length})</summary>
+                          <ul className="zonelist">
+                            {deletedZones.map((z) => (
+                              <li key={z.id} className="zonerow gone">
+                                <span className="swatch" style={{ background: z.hex }} />
+                                <code>{z.code}</code>
+                                <span className="zid">#{z.id.slice(0, 6)}</span>
+                                {z.area_sqft ? <span className="sqft">{z.area_sqft.toLocaleString()} sq ft</span> : null}
+                                <button
+                                  className="ghost restore" title="Restore zone"
+                                  onClick={() => handleRestoreZone(z.id)}
+                                ><span className="material-symbols-outlined">undo</span></button>
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
+                    </div>
+                  );
+                })() : null}
               </div>
             </div>
           )}

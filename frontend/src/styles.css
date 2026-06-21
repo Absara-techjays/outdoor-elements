@@ -289,6 +289,30 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
 .zonerow .restore:hover { opacity: 1; color: var(--primary); }
 .zonerow.gone { opacity: .6; }
 .zonerow.gone code { text-decoration: line-through; }
+
+/* ── merged surfaces list: material header + nested zones, one column ── */
+.surflist { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 440px; overflow: auto; }
+.matgroup { display: flex; flex-direction: column; }
+.matgroup .matrow {
+  display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 500;
+  padding: 6px; border-radius: 8px; transition: background var(--dur-fast) var(--ease);
+}
+.matgroup .matrow:hover { background: var(--surface-alt); }
+.matgroup .matrow .swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); flex: 0 0 auto; }
+.matgroup .matrow > code { font-size: 12px; min-width: 42px; color: var(--text); }
+.matgroup .matrow .sqft { font-size: 12px; color: var(--primary); font-weight: 600; margin-left: auto; font-variant-numeric: tabular-nums; }
+.matgroup .matrow .sqft.muted { color: var(--muted); font-weight: 400; }
+.matgroup .matrow .trash {
+  background: transparent; border: none; cursor: pointer; color: var(--muted);
+  opacity: .7; padding: 2px 4px; display: inline-flex; margin-left: 4px;
+  transition: color var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+.matgroup .matrow .trash:hover { opacity: 1; color: var(--danger); }
+.zonelist.nested { margin: 1px 0 2px 7px; padding-left: 9px; border-left: 1px solid var(--border); max-height: none; overflow: visible; }
+.zonelist.nested .zonerow { gap: 8px; padding: 4px 6px; }
+.zonelist.nested .zonerow .swatch { width: 13px; height: 13px; border-radius: 3px; }
+.zonelist.nested .zonerow .zid { font-size: 11px; color: var(--muted); min-width: 56px; }
+
 .deleted-zones { margin-top: 10px; }
 .deleted-zones summary { font-size: 12px; color: var(--muted); cursor: pointer; padding: 4px 0; }
 .zonerow .material-symbols-outlined { font-size: 18px; }
@@ -441,3 +465,33 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
 }
 .logout-btn:hover { background: var(--surface-alt); color: var(--text); }
 .logout-btn .material-symbols-outlined { font-size: 18px; }
+
+/* ── interactive zone overlay (Stage 2 editor) ────────────────────────── */
+.s2img { position: relative; }
+.zone-svg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none;          /* off until edit mode */
+}
+.zone-svg.on { pointer-events: auto; }
+.zpoly {
+  fill: #ffffff; fill-opacity: 0; stroke: none; cursor: pointer;
+  pointer-events: all;           /* whole polygon area is clickable */
+  transition: fill-opacity var(--dur-fast) var(--ease);
+}
+.zone-svg.on .zpoly:hover { fill: var(--primary); fill-opacity: .12; }
+.zpoly.hot { fill: var(--green); fill-opacity: .18; }
+.zpoly.sel {
+  fill: var(--primary); fill-opacity: .30;
+  stroke: var(--primary); stroke-width: 2; vector-effect: non-scaling-stroke;
+}
+/* optimistic-delete mask: paints the just-removed region back to page white
+   until the server re-renders the overlay (makes delete feel instant) */
+.zmask {
+  fill: #ffffff; stroke: #ffffff; stroke-width: 2;
+  vector-effect: non-scaling-stroke; pointer-events: none;
+}
+.marquee {
+  fill: var(--primary); fill-opacity: .10;
+  stroke: var(--primary); stroke-width: 1.5; stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke; pointer-events: none;
+}

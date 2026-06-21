@@ -110,13 +110,18 @@ export const removeMaterial = (jobId, page, code) =>
 export const undoEdit = (jobId, page) =>
   _post(`/api/jobs/${jobId}/stage2/${page}/undo`);
 
-// ---------- Per-zone: list / delete-by-id / restore ----------
+// ---------- Per-zone: list / delete-by-id / batch / restore ----------
+// Returns { zones, page:{width,height} } — page size drives the SVG overlay viewBox.
 export async function listZones(jobId, page, includeDeleted = false) {
   const res = await fetch(
     `/api/jobs/${jobId}/stage2/${page}/zones?include_deleted=${includeDeleted}`);
   if (!res.ok) throw new Error("Could not load zones");
-  return (await res.json()).zones;
+  return res.json();
 }
+
+// Soft-delete several zones by id in one request (marquee / multi-select).
+export const deleteZonesBatch = (jobId, page, ids) =>
+  _post(`/api/jobs/${jobId}/stage2/${page}/zones/delete_batch`, { ids });
 
 export async function deleteZone(jobId, zoneId) {
   const res = await fetch(`/api/jobs/${jobId}/zones/${zoneId}`, { method: "DELETE" });
