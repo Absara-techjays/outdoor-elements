@@ -10,7 +10,7 @@ from PIL import Image
 
 from celery import shared_task
 
-from . import (estimate_parse, gemini_config, legend, pool_mode, qto_engine,
+from . import (estimate_parse, gemini_config, legend, pool_mode, pool_scope, qto_engine,
                selection, stage2, store, zones)
 from .stage2 import legend_comparison
 
@@ -87,6 +87,19 @@ def run_stage1_config(job_id: str, filename: str) -> dict:
         cfg = {"sheets": {}, "materials": {}, "source": "fallback",
                "error": f"{type(exc).__name__}: {exc}"}
     store.write_config(job_id, cfg)
+
+    # Parse pool scope from estimate PDF (if present) and merge into config.
+    ep = store.estimate_path(job_id)
+    if ep.exists():
+        scope = pool_scope.parse_pool_scope(
+            str(ep),
+            api_key=os.environ.get("GEMINI_API_KEY"),
+        )
+        if scope:
+            cfg = store.read_config(job_id) or {}
+            cfg["pool_scope"] = scope
+            store.write_config(job_id, cfg)
+
     cur = store.read_status(job_id) or {}
     cur["config_status"] = "done"
     store.write_status(job_id, cur)

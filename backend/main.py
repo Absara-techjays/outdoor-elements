@@ -9,6 +9,10 @@ Endpoints:
 """
 from __future__ import annotations
 
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -120,6 +124,14 @@ def get_config(job_id: str) -> dict:
     if cfg is None:
         raise HTTPException(status_code=404, detail="Config not ready.")
     return cfg
+
+
+@app.get("/api/jobs/{job_id}/pool-scope")
+def get_pool_scope(job_id: str) -> dict:
+    cfg = store.read_config(job_id)
+    if cfg is None or "pool_scope" not in cfg:
+        raise HTTPException(status_code=404, detail="Pool scope not available.")
+    return cfg["pool_scope"]
 
 
 @app.patch("/api/jobs/{job_id}/config/scale")
