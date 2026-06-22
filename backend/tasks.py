@@ -181,12 +181,23 @@ def _compute_takeoff(pdf, page: int, groups: list, scale: float) -> list:
                                       scale_in_per_ft=scale, areas=area_by_code)
     except Exception:  # noqa: BLE001
         items = []
-    # Phase 1 — visual counts: trees / pools / spas via gemini-3.1-pro-preview.
-    # The leader-arrow symbols the geometric engine can't count. Never fatal.
+    # Visual counts via gemini-3.1-pro-preview: trees/pools/spas the geometric
+    # engine can't count. A page dense with trees is a PLANTING plan -> read the
+    # schedule and produce per-species counts instead of the generic "Trees" row.
     try:
-        from . import visual_detect
-        rows, _anns = visual_detect.count_takeoff_rows(str(pdf), page)
-        items = items + rows
+        from . import visual_detect, planting
+        # Planting plan? Gate on the plant schedule + plant labels on this page
+        # (deterministic) — per-species counts. Else generic trees/pools/spas.
+        prows = []
+        sp = planting.find_schedule_page(str(pdf))
+        if sp is not None:
+            sched = planting.read_schedule(str(pdf), sp)
+            prows = planting.page_count_rows(str(pdf), page, sched)
+        if prows:
+            items = items + prows
+        else:
+            rows, _anns = visual_detect.count_takeoff_rows(str(pdf), page)
+            items = items + rows
     except Exception:  # noqa: BLE001
         pass
     return items

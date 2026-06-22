@@ -33,6 +33,71 @@ Return STRICT JSON only, no prose:
 [{"code":"<code exactly as written>","count":<integer total>}]"""
 
 
+SCHEDULE_PROMPT = """This is a landscape PLANT SCHEDULE / legend table mapping plant
+CODES to botanical / common names, grouped by category (Canopy Trees, Palm Trees,
+Understory Trees, Shrubs, Perennials, Groundcovers, Vines, Annual Color, Sod...).
+
+Return STRICT JSON only, one object per row:
+[{"code":"<code exactly as written>","name":"<common name>","category":"<category>"}]
+Include EVERY row. JSON only, no prose."""
+
+# categories whose items are COUNTED (each) vs measured by AREA (sq ft)
+_COUNT_CATS = ("tree", "palm", "shrub")
+_AREA_CATS = ("groundcover", "ground cover", "perennial", "vine", "annual", "sod", "grass")
+
+
+def find_schedule_page(pdf: str) -> int | None:
+    """Page holding the plant schedule (a table with botanical names)."""
+    import fitz
+    doc = fitz.open(pdf)
+    try:
+        for i in range(len(doc)):
+            up = doc[i].get_text().upper()
+            if "SCHEDULE" in up and ("BOTANICAL" in up or "COMMON NAME" in up):
+                return i
+    finally:
+        doc.close()
+    return None
+
+
+def read_schedule(pdf: str, page: int | None = None, api_key: str | None = None,
+                  dpi: int = 160) -> list[dict]:
+    """Vision-read the plant schedule -> [{code, name, category, unit}]. unit is
+    'count' for trees/palms/shrubs, 'area' for groundcover/perennial/sod/etc."""
+    if page is None:
+        page = find_schedule_page(pdf)
+    if page is None:
+        return []
+    key = _api_key(api_key)
+    genai.configure(api_key=key)
+    model = genai.GenerativeModel(MODEL)
+    jpeg = gemini_config.render_page_jpeg(pdf, page, dpi=dpi)
+    resp = model.generate_content([SCHEDULE_PROMPT, {"mime_type": "image/jpeg", "data": jpeg}])
+    return _parse_schedule(resp.text or "")
+
+
+def _parse_schedule(text: str) -> list[dict]:
+    t = re.sub(r"^```(?:json)?|```$", "", (text or "").strip(), flags=re.I | re.M).strip()
+    m = re.search(r"\[.*\]", t, re.S)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return []
+    out = []
+    for d in data if isinstance(data, list) else []:
+        if not isinstance(d, dict) or not d.get("code"):
+            continue
+        cat = str(d.get("category", "")).lower()
+        unit = "count" if any(k in cat for k in _COUNT_CATS) else \
+               ("area" if any(k in cat for k in _AREA_CATS) else "count")
+        out.append({"code": str(d["code"]).strip().upper(),
+                    "name": str(d.get("name", "")).strip(),
+                    "category": cat, "unit": unit})
+    return out
+
+
 def _api_key(explicit: str | None) -> str:
     key = explicit or os.environ.get("GEMINI_API_KEY")
     if not key:
@@ -105,6 +170,50 @@ def text_label_counts(pdf: str, page: int, valid_codes: set | None = None) -> di
         if _CODE_TOK.match(t) and (vc is None or t in vc):
             out[t] = out.get(t, 0) + 1
     return out
+
+
+def planting_count_rows(pdf: str, count_pages: list[int], schedule_page: int | None = None,
+                        api_key: str | None = None) -> tuple[list[dict], list[dict]]:
+    """Fully-automatic planting count: read the schedule for the anchor codes,
+    hybrid-count each on the planting pages, return takeoff rows (unit 'count').
+    No QTO needed. Returns (rows, schedule)."""
+    sched = read_schedule(pdf, schedule_page, api_key)
+    count_codes = {s["code"] for s in sched if s["unit"] == "count"}
+    names = {s["code"]: s["name"] for s in sched}
+    if not count_codes:
+        return [], sched
+    counts = hybrid_counts(pdf, count_pages, valid_codes=count_codes, api_key=api_key)
+    rows = []
+    for code, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+        if n > 0:
+            rows.append({"code": code, "name": names.get(code, code), "unit": "count",
+                         "detect": "symbol", "quantity": n, "unit_label": "each",
+                         "source": "planting"})
+    return rows, sched
+
+
+def page_count_rows(pdf: str, page: int, sched: list[dict], api_key: str | None = None,
+                    min_labels: int = 8) -> list[dict]:
+    """Per-species count rows for ONE planting page, given the schedule. Gated on
+    a DETERMINISTIC signal (>= min_labels plant labels on the page) so it only
+    runs on real planting plans and never depends on a flaky vision tree count."""
+    count_codes = {s["code"] for s in sched if s["unit"] == "count"}
+    names = {s["code"]: s["name"] for s in sched}
+    labels = text_label_counts(pdf, page, count_codes)
+    if sum(labels.values()) < min_labels:
+        return []   # not a planting page
+    try:
+        vis = count_species(pdf, page, api_key=api_key, valid_codes=count_codes)
+    except Exception:  # noqa: BLE001
+        vis = {}
+    rows = []
+    for code in count_codes:
+        n = max(labels.get(code, 0), vis.get(code, 0))
+        if n > 0:
+            rows.append({"code": code, "name": names.get(code, code), "unit": "count",
+                         "detect": "symbol", "quantity": n, "unit_label": "each",
+                         "source": "planting"})
+    return sorted(rows, key=lambda r: -r["quantity"])
 
 
 def hybrid_counts(pdf: str, pages: list[int], valid_codes: set | None = None,
