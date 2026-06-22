@@ -253,36 +253,86 @@ def plant_points(pdf: str, page: int, count_codes: set, api_key: str | None = No
     return out
 
 
+def _species_color(i: int) -> tuple:
+    import colorsys
+    cr, cg, cb = colorsys.hsv_to_rgb((i * 0.137) % 1.0, 0.62, 0.92)
+    return (int(cr * 255), int(cg * 255), int(cb * 255))
+
+
 def render_planting_overlay(pdf: str, page: int, sched: list[dict], out_path: str,
                             dpi: int = 150, api_key: str | None = None) -> str:
-    """Render the plan with each plant DRAWING colored by species (automatic, during
-    extraction) — colors land on the symbols in the beds (vision points), falling
-    back to label positions if vision is unavailable."""
-    import colorsys
+    """Render the plan with each species' plants as filled, semi-transparent COLOR
+    PATCHES (so planting beds read as colored, like the human takeoff), plus a
+    legend on the right (swatch + code + name + count). Bed positions come from the
+    drawn plant symbols (vision points), falling back to label positions."""
     from PIL import Image, ImageDraw
     doc = fitz.open(pdf)
     pg = doc[page]
     pix = pg.get_pixmap(dpi=dpi)
-    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGB")
+    plan = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGB")
     W, H, pw, ph = pix.width, pix.height, pg.rect.width, pg.rect.height
     doc.close()
+
     count_codes = {s["code"] for s in sched if s["unit"] == "count"}
+    names = {s["code"]: s["name"] for s in sched}
     try:
         pos = plant_points(pdf, page, count_codes, api_key=api_key)
     except Exception:  # noqa: BLE001
         pos = {}
     if not pos:
         pos = label_positions(pdf, page, count_codes)
-    dr = ImageDraw.Draw(img, "RGBA")
-    r = max(9, int(W / 300))
-    for i, code in enumerate(sorted(pos)):
-        cr, cg, cb = colorsys.hsv_to_rgb((i * 0.137) % 1.0, 0.62, 0.92)
-        col = (int(cr * 255), int(cg * 255), int(cb * 255))
+
+    # paint filled, semi-transparent patches on a separate layer so overlapping
+    # plants of one species merge into a colored bed
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    dl = ImageDraw.Draw(layer)
+    blob = max(16, int(W / 110))
+    ordered = sorted(pos, key=lambda c: -len(pos[c]))   # stable color by frequency
+    color_of = {code: _species_color(i) for i, code in enumerate(ordered)}
+    for code in ordered:
+        col = color_of[code]
         for (x, y) in pos[code]:
             cx, cy = x / pw * W, y / ph * H
-            dr.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col + (170,), outline=col, width=2)
-    img.save(out_path)
+            dl.ellipse([cx - blob, cy - blob, cx + blob, cy + blob], fill=col + (95,))
+            dl.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=col + (220,))
+    plan = Image.alpha_composite(plan.convert("RGBA"), layer).convert("RGB")
+
+    # legend panel on the right
+    counts = {c: len(p) for c, p in pos.items()}
+    LW = max(300, int(W * 0.16))
+    canvas = Image.new("RGB", (W + LW, H), "white")
+    canvas.paste(plan, (0, 0))
+    d = ImageDraw.Draw(canvas)
+    d.rectangle([W, 0, W + LW, H], fill=(250, 250, 251))
+    d.line([W, 0, W, H], fill=(220, 220, 224), width=1)
+    pad = int(LW * 0.06)
+    fz = max(13, int(LW / 26))
+    f, fb = _legend_font(fz), _legend_font(int(fz * 1.4), True)
+    y = pad
+    d.text((W + pad, y), "PLANTS — by species", font=fb, fill=(25, 25, 30)); y += int(fz * 2.2)
+    rh = int(fz * 1.9)
+    for code in ordered:
+        col = color_of[code]
+        d.rectangle([W + pad, y + 3, W + pad + fz, y + 3 + fz], fill=col, outline=(140, 140, 140))
+        d.text((W + pad + fz + 8, y), f"{code}", font=_legend_font(fz, True), fill=(30, 30, 36))
+        d.text((W + pad + fz + 8 + int(LW * 0.18), y), f"{counts[code]}", font=f, fill=(26, 115, 232))
+        nm = (names.get(code, "") or "")[:18]
+        d.text((W + pad + fz + 8 + int(LW * 0.30), y), nm, font=f, fill=(110, 110, 118))
+        y += rh
+        if y > H - rh:
+            break
+    canvas.save(out_path)
     return out_path
+
+
+def _legend_font(size: int, bold: bool = False):
+    from PIL import ImageFont
+    for n in (["arialbd.ttf"] if bold else ["arial.ttf"]) + ["DejaVuSans.ttf"]:
+        try:
+            return ImageFont.truetype(n, size)
+        except Exception:  # noqa: BLE001
+            continue
+    return ImageFont.load_default()
 
 
 def page_count_rows(pdf: str, page: int, sched: list[dict], api_key: str | None = None,
