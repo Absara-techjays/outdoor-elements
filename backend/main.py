@@ -141,6 +141,42 @@ def edit_scale(job_id: str, edit: ScaleEdit) -> dict:
     return cfg
 
 
+@app.get("/api/jobs")
+def list_jobs() -> list[dict]:
+    """Return all jobs ordered by most-recent first, for the Previous Jobs panel."""
+    with db.session() as s:
+        jobs = s.query(db.Job).order_by(db.Job.created_at.desc()).all()
+        result = []
+        for j in jobs:
+            st = j.status or {}
+            result.append({
+                "job_id": j.job_id,
+                "filename": j.filename,
+                "status": st.get("status"),
+                "page_count": st.get("page_count"),
+                "kept_count": st.get("kept_count"),
+                "created_at": j.created_at.isoformat() if j.created_at else None,
+            })
+        return result
+
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job(job_id: str) -> dict:
+    """Delete a job: remove DB rows (job + stage2 results + zones) and filesystem files."""
+    import shutil
+    with db.session() as s:
+        job = s.get(db.Job, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Unknown job id.")
+        s.query(db.Zone).filter(db.Zone.job_id == job_id).delete()
+        s.query(db.Stage2Result).filter(db.Stage2Result.job_id == job_id).delete()
+        s.delete(job)
+    job_path = store.job_dir(job_id)
+    if job_path.exists():
+        shutil.rmtree(job_path)
+    return {"deleted": job_id}
+
+
 @app.get("/api/jobs/{job_id}", response_model=JobStatus)
 def job_status(job_id: str) -> JobStatus:
     data = store.read_status(job_id)

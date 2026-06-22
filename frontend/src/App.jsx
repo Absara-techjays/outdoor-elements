@@ -5,9 +5,11 @@ import {
   getConfig, editScale, getPricing, editRate,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
+  getPoolScope,
 } from "./api.js";
 import ZoneEditor from "./ZoneEditor.jsx";
 import PoolScopePanel from "./PoolScopePanel.jsx";
+import PreviousJobs from "./PreviousJobs.jsx";
 
 const STAGES = [
   { n: 1, name: "Upload & select pages", active: true },
@@ -201,6 +203,24 @@ export default function App({ onLogout }) {
     }
   }
 
+  // Resume a previous job by job_id (from the Previous Jobs panel).
+  async function handleResume(jobId) {
+    setError(null);
+    setBusy(true);
+    setJob(null);
+    setView("stage1");
+    setS2(null);
+    setConfig(null);
+    try {
+      await pollJob(jobId, (j) => setJob({ ...j, job_id: jobId }));
+      setResumed(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Stage 2 — detect & color surface regions on a kept page.
   async function runStage2(pageIndex) {
     setS2page(pageIndex);
@@ -272,6 +292,8 @@ export default function App({ onLogout }) {
           )}
         </div>
       )}
+
+      {!job && !busy && <PreviousJobs onResume={handleResume} />}
 
       {error && <div className="error">⚠ {error}</div>}
 

@@ -165,3 +165,16 @@ export async function getPoolScope(jobId) {
   if (!res.ok) throw new Error("Failed to load pool scope");
   return res.json();
 }
+
+// ---------- Previous jobs ----------
+export async function listJobs() {
+  const res = await fetch("/api/jobs");
+  if (!res.ok) throw new Error("Failed to load jobs");
+  return res.json();
+}
+
+export async function deleteJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete job");
+  return res.json();
+}
