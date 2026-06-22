@@ -661,12 +661,19 @@ export default function App({ onLogout }) {
             </div>
           )}
 
-          {s2?.status === "done" && (
+          {Object.values(s2statuses).some((s) => s === "done") && (
             <div className="actions">
               <button className="secondary" onClick={() => setView("stage1")}>← Pages</button>
-              <button className="primary" onClick={() => setView("stage3")}>
-                Continue → Stage 3 (measure &amp; compare)
-              </button>
+              {(() => {
+                const vals = Object.values(s2statuses);
+                const done = vals.filter((s) => s === "done").length;
+                const all = vals.length && done === vals.length;
+                return (
+                  <button className="primary" onClick={() => setView("stage3")}>
+                    {all ? "Continue → Stage 3 (estimate)" : `Continue → Stage 3 (${done}/${vals.length} sheets ready)`}
+                  </button>
+                );
+              })()}
             </div>
           )}
         </section>
