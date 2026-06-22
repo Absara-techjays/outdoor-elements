@@ -206,10 +206,58 @@ def label_positions(pdf: str, page: int, valid_codes: set | None = None) -> dict
     return out
 
 
+POINTS_PROMPT = """This is a landscape PLANTING PLAN. Find each PLANT SYMBOL DRAWN on
+the plan (the tree/palm/shrub/groundcover symbols in the planting beds, NOT the
+text labels) and return its species code and the location of the DRAWN symbol.
+Use ONLY these plant codes: {codes}.
+Return STRICT JSON only: [{{"code":"<code>","point":[y,x]}}]
+point normalized 0-1000 (y top->bottom, x left->right). JSON only."""
+
+
+def plant_points(pdf: str, page: int, count_codes: set, api_key: str | None = None,
+                 dpi: int = 170) -> dict[str, list]:
+    """Locations of the DRAWN plant symbols per species (PDF points), via vision —
+    so coloring lands on the plants in the beds, not on the edge callout labels."""
+    if not count_codes:
+        return {}
+    key = _api_key(api_key)
+    genai.configure(api_key=key)
+    model = genai.GenerativeModel(MODEL)
+    prompt = POINTS_PROMPT.format(codes=", ".join(sorted(count_codes)))
+    jpeg = gemini_config.render_page_jpeg(pdf, page, dpi=dpi)
+    resp = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": jpeg}])
+    t = re.sub(r"^```(?:json)?|```$", "", (resp.text or "").strip(), flags=re.I | re.M).strip()
+    m = re.search(r"\[.*\]", t, re.S)
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return {}
+    doc = fitz.open(pdf)
+    r = doc[page].rect
+    doc.close()
+    vc = {c.upper() for c in count_codes}
+    out: dict[str, list] = {}
+    for it in data if isinstance(data, list) else []:
+        if not isinstance(it, dict):
+            continue
+        c = str(it.get("code", "")).upper()
+        p = it.get("point")
+        if c in vc and isinstance(p, (list, tuple)) and len(p) == 2:
+            try:
+                y, x = float(p[0]), float(p[1])
+            except (TypeError, ValueError):
+                continue
+            out.setdefault(c, []).append((x / 1000 * r.width, y / 1000 * r.height))
+    return out
+
+
 def render_planting_overlay(pdf: str, page: int, sched: list[dict], out_path: str,
-                            dpi: int = 150) -> str:
-    """Render the plan with each plant label COLORED by species (automatic, during
-    extraction) — so a planting page shows colored plants like the human takeoff."""
+                            dpi: int = 150, api_key: str | None = None) -> str:
+    """Render the plan with each plant DRAWING colored by species (automatic, during
+    extraction) — colors land on the symbols in the beds (vision points), falling
+    back to label positions if vision is unavailable."""
     import colorsys
     from PIL import Image, ImageDraw
     doc = fitz.open(pdf)
@@ -219,9 +267,14 @@ def render_planting_overlay(pdf: str, page: int, sched: list[dict], out_path: st
     W, H, pw, ph = pix.width, pix.height, pg.rect.width, pg.rect.height
     doc.close()
     count_codes = {s["code"] for s in sched if s["unit"] == "count"}
-    pos = label_positions(pdf, page, count_codes)
+    try:
+        pos = plant_points(pdf, page, count_codes, api_key=api_key)
+    except Exception:  # noqa: BLE001
+        pos = {}
+    if not pos:
+        pos = label_positions(pdf, page, count_codes)
     dr = ImageDraw.Draw(img, "RGBA")
-    r = max(7, int(W / 380))
+    r = max(9, int(W / 300))
     for i, code in enumerate(sorted(pos)):
         cr, cg, cb = colorsys.hsv_to_rgb((i * 0.137) % 1.0, 0.62, 0.92)
         col = (int(cr * 255), int(cg * 255), int(cb * 255))
