@@ -7,6 +7,7 @@ import {
   listZones, deleteZone, restoreZone, deleteZonesBatch,
 } from "./api.js";
 import ZoneEditor from "./ZoneEditor.jsx";
+import PoolScopePanel from "./PoolScopePanel.jsx";
 
 const STAGES = [
   { n: 1, name: "Upload & select pages", active: true },
@@ -437,6 +438,9 @@ export default function App({ onLogout }) {
                 {editMode && <p className="muted edit-hint">Click zones to select (click again to deselect), then Delete. Or use the 🗑 on a material to drop all of it.</p>}
                 {s2.edit_note && <p className="edit-note">{s2.edit_note}</p>}
 
+                {s2?.method === "pool" && (
+                  <PoolScopePanel jobId={job.job_id} />
+                )}
                 {(s2.groups?.length > 0 || zones.length > 0 || deletedZones.length > 0) ? (() => {
                   // One combined column: each material is a header row with its total,
                   // and its individual zones are nested beneath it (was two separate
