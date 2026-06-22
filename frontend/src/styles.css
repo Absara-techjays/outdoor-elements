@@ -222,6 +222,9 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
 .anypage input { width: 64px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 
 .s2grid { display: grid; grid-template-columns: 1fr 280px; gap: 20px; align-items: start; }
+/* pin the plan to the top so it follows while you scroll the (taller) panel,
+   instead of leaving a big empty gap under a short landscape sheet */
+.s2grid > .s2img { position: sticky; top: 16px; align-self: start; }
 .s2img { position: relative; background: #fff; border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; box-shadow: var(--elev-1); }
 .s2img img { display: block; width: 100%; }
 .s2img.editing img { cursor: crosshair; }
