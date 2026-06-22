@@ -4,17 +4,16 @@
 // pages: { "<keptIndex>": "pending"|"queued"|"running"|"done"|"error" }  (kept pages only)
 // returns: { view: "stage1"|"stage2"|"stage3", firstDone: number|null }
 //
-// Rule: all kept pages "done" -> Stage 3 (estimate); some done -> Stage 2;
-// none done -> Stage 1. firstDone is the lowest "done" page index (or null).
+// Rule: ANY extracted sheet -> Stage 3 (the estimate aggregates whatever is
+// done, so a partially-extracted job still resumes on its estimate). Only an
+// untouched job (nothing extracted) starts at Stage 1. firstDone is the lowest
+// "done" page index (or null) — used so "← Back" from Stage 3 lands on a real sheet.
 export function pickResumeStage(pages) {
   const entries = Object.entries(pages || {});
-  const total = entries.length;
   const doneIdx = entries
     .filter(([, s]) => s === "done")
     .map(([k]) => Number(k));
-  const doneCount = doneIdx.length;
-  const firstDone = doneCount ? Math.min(...doneIdx) : null;
-  if (total > 0 && doneCount === total) return { view: "stage3", firstDone };
-  if (doneCount > 0) return { view: "stage2", firstDone };
+  const firstDone = doneIdx.length ? Math.min(...doneIdx) : null;
+  if (doneIdx.length) return { view: "stage3", firstDone };
   return { view: "stage1", firstDone: null };
 }

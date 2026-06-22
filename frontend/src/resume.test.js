@@ -20,17 +20,17 @@ test("every kept page done → Stage 3, firstDone is lowest index", () => {
   );
 });
 
-test("some but not all done → Stage 2, firstDone is lowest done index", () => {
+test("some done (partial) → Stage 3, firstDone is lowest done index", () => {
   assert.deepEqual(
     pickResumeStage({ "0": "pending", "3": "done", "5": "done" }),
-    { view: "stage2", firstDone: 3 }
+    { view: "stage3", firstDone: 3 }
   );
 });
 
-test("done + error covering all pages is NOT complete → Stage 2", () => {
+test("at least one done → Stage 3 even with errors elsewhere", () => {
   assert.deepEqual(
     pickResumeStage({ "0": "done", "1": "error" }),
-    { view: "stage2", firstDone: 0 }
+    { view: "stage3", firstDone: 0 }
   );
 });
 
