@@ -11,12 +11,57 @@ export async function login(passcode) {
   return res.json();
 }
 
+// Cloud Run has a 32 MB request body limit; large PDFs go direct to GCS.
+const DIRECT_UPLOAD_THRESHOLD = 28 * 1024 * 1024; // 28 MB
+
+async function _jsonOrText(res) {
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("json") ? res.json().catch(() => ({})) : { detail: await res.text() };
+}
+
 export async function uploadPdf(file) {
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch("/api/upload", { method: "POST", body: form });
-  if (!res.ok) throw new Error((await res.json()).detail || "Upload failed");
-  return res.json(); // { job_id, filename, eager }
+  // Small files — standard multipart upload through Cloud Run
+  if (file.size <= DIRECT_UPLOAD_THRESHOLD) {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/upload", { method: "POST", body: form });
+    if (!res.ok) {
+      const body = await _jsonOrText(res);
+      throw new Error(body.detail || `Upload failed (${res.status})`);
+    }
+    return res.json();
+  }
+
+  // Large files — direct-to-GCS resumable upload (bypasses Cloud Run size limit)
+  const urlRes = await fetch("/api/upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, size: file.size }),
+  });
+  if (!urlRes.ok) {
+    const body = await _jsonOrText(urlRes);
+    throw new Error(body.detail || "Could not get upload URL");
+  }
+  const { job_id, upload_url } = await urlRes.json();
+
+  // PUT the file directly to GCS (no Cloud Run hop)
+  const putRes = await fetch(upload_url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/pdf" },
+    body: file,
+  });
+  if (!putRes.ok) throw new Error(`GCS upload failed (${putRes.status})`);
+
+  // Tell the backend to start Stage 1 processing
+  const startRes = await fetch(
+    `/api/jobs/${job_id}/start?filename=${encodeURIComponent(file.name)}`,
+    { method: "POST" }
+  );
+  if (!startRes.ok) {
+    const body = await _jsonOrText(startRes);
+    throw new Error(body.detail || "Could not start processing");
+  }
+  return startRes.json();
 }
 
 export async function getJob(jobId) {

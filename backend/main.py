@@ -452,6 +452,52 @@ def pricing_compare(job_id: str, page: int) -> dict:
             "section_totals": est.section_totals, **cmp}
 
 
+# ---------- Large-file upload: direct-to-GCS path (bypasses Cloud Run 32 MB limit) ----------
+GCS_JOBS_BUCKET = os.environ.get("GCS_JOBS_BUCKET", "outdoor-elements-499605-jobs")
+
+
+class UploadUrlRequest(BaseModel):
+    filename: str
+    size: int  # bytes
+
+
+@app.post("/api/upload-url")
+async def get_upload_url(req: UploadUrlRequest) -> dict:
+    """For PDFs > 32 MB: returns a GCS resumable-upload session URI for direct browser upload.
+    After the PUT completes, call POST /api/jobs/{job_id}/start to begin processing.
+    """
+    if not req.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a .pdf file.")
+    try:
+        from google.cloud import storage as gcs
+        job_id = store.new_job_id()
+        store.write_status(job_id, {"job_id": job_id, "filename": req.filename, "status": "queued"})
+        blob = gcs.Client().bucket(GCS_JOBS_BUCKET).blob(f"{job_id}/upload.pdf")
+        upload_url = blob.create_resumable_upload_session(
+            content_type="application/pdf",
+            size=req.size,
+        )
+        return {"job_id": job_id, "upload_url": upload_url}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create upload URL: {exc}")
+
+
+@app.post("/api/jobs/{job_id}/start")
+async def start_job(job_id: str, background: BackgroundTasks, filename: str = "") -> dict:
+    """Kick off Stage 1 after a direct GCS upload has completed."""
+    pdf = store.pdf_path(job_id)
+    if not pdf.exists():
+        raise HTTPException(status_code=404, detail="PDF not found — ensure the GCS upload completed.")
+    store.write_status(job_id, {"job_id": job_id, "filename": filename, "status": "queued"})
+    if EAGER:
+        background.add_task(run_stage1, job_id, filename)
+        background.add_task(run_stage1_config, job_id, filename)
+    else:
+        stage1_select.delay(job_id, filename)
+        stage1_config.delay(job_id, filename)
+    return UploadResponse(job_id=job_id, filename=filename, eager=EAGER)
+
+
 # ---------- SPA catch-all (production: Cloud Run serves both API + frontend) ----------
 # Must come LAST so all /api/* routes above take precedence.
 from pathlib import Path as _Path  # noqa: E402
