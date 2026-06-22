@@ -100,6 +100,19 @@ def test_parse_pool_scope_returns_none_for_missing_section():
         os.unlink(tmp)
 
 
+def test_parse_items_no_total_in_last_item():
+    """M1 regression: total line must not appear in any item's text."""
+    from backend.pool_scope import _parse_items
+    items = _parse_items(SAMPLE_SECTION)
+    for it in items:
+        assert "Total:" not in it["text"], (
+            f"Item {it['number']} text contains 'Total:': {it['text']!r}"
+        )
+        assert "$" not in it["text"], (
+            f"Item {it['number']} text contains '$': {it['text']!r}"
+        )
+
+
 def test_parse_pool_scope_full():
     import tempfile, os
     import fitz

@@ -30,7 +30,7 @@ def _find_section(text: str, section_name: str) -> str | None:
     pattern = (
         rf"(?m)^(?i:{escaped})[^\n]*\n"           # header line (case-insensitive)
         rf"(.*?)"                                   # body (lazy)
-        rf"(?=^[A-Z][A-Z &/()0-9]{{3,}}[^\n]*\n|\Z)"  # next ALL-CAPS header or EOF
+        rf"(?=^(?=.{{1,60}}\n)[A-Z][A-Z &/()0-9]{{3,}}[^\n]*\n|\Z)"  # next ALL-CAPS header (≤60 chars) or EOF
     )
     m = re.search(pattern, text, re.DOTALL)
     if not m:
@@ -55,6 +55,9 @@ def _parse_total(section_text: str, section_name: str) -> float | None:
 
 def _parse_items(section_text: str) -> list[dict]:
     """Split section into numbered items, each with optional sub-items (a–h)."""
+    # Strip total lines (e.g. "Swimming Pool Total: $549,863.52") before splitting,
+    # so the last numbered item doesn't absorb the total line into its text.
+    section_text = re.sub(r"(?im)^\w.*Total:?\s*\$[\d,]+\.\d{2}[^\n]*\n?", "", section_text)
     # Split on lines that start a new numbered item
     item_blocks = re.split(r"(?m)^(?=\d{1,2}\.\s)", section_text)
     items = []
