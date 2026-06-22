@@ -11,7 +11,7 @@ from PIL import Image
 from celery import shared_task
 
 from . import (estimate_parse, gemini_config, legend, pool_mode, pool_scope, qto_engine,
-               selection, stage2, store, zones)
+               selection, stage2, store, zone_filter, zones)
 from .stage2 import legend_comparison
 
 
@@ -48,6 +48,14 @@ def _persist_masks(job_id: str, page: int, masks: dict, scale: float, dpi: int =
                         codes=np.array(codes), scale=float(scale), dpi=int(dpi))
     zlist = zones.extract_zones_from_label(label, codes, float(scale), int(dpi),
                                            source="engine")
+    zlist = zone_filter.filter_false_positives(
+        zlist,
+        store.pdf_path(job_id),
+        page,
+        int(dpi),
+        float(scale),
+        os.environ.get("GEMINI_API_KEY"),
+    )
     store.replace_zones(job_id, page, zlist)
 
 # QTO reference values (the lead's `known` dict + our QTO legend) for the
