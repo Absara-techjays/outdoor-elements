@@ -27,10 +27,17 @@ from .tasks import (run_stage1, run_stage1_config, run_stage2, stage1_config,
 
 app = FastAPI(title="Outdoor Elements — Takeoff (Stage 1)")
 
-# Vite dev server runs on 5173; allow it during development.
+# In production (Cloud Run) we serve the SPA from the same origin so no CORS is
+# needed. In dev the Vite proxy handles /api, but localhost:5173 is listed here
+# so that direct API testing still works. ALLOWED_ORIGINS env var overrides both.
+_cors_origins = (
+    os.environ["ALLOWED_ORIGINS"].split(",")
+    if os.environ.get("ALLOWED_ORIGINS")
+    else ["http://localhost:5173", "http://127.0.0.1:5173"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -443,3 +450,18 @@ def pricing_compare(job_id: str, page: int) -> dict:
     cmp = estimate_pricing.price_ai(measured, est.rate_table())
     return {"available": True, "grand_total": est.grand_total,
             "section_totals": est.section_totals, **cmp}
+
+
+# ---------- SPA catch-all (production: Cloud Run serves both API + frontend) ----------
+# Must come LAST so all /api/* routes above take precedence.
+from pathlib import Path as _Path  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+_DIST = _Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="spa-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _serve_spa(full_path: str):
+        from fastapi.responses import FileResponse as _FR
+        return _FR(str(_DIST / "index.html"))
