@@ -77,11 +77,6 @@ export async function getStage2(jobId, page) {
   return res.json();
 }
 
-// Human-style QTO output: colored plan + takeoff legend (view / download).
-export function qtoUrl(jobId, page) {
-  return `/api/jobs/${jobId}/stage2/${page}/qto`;
-}
-
 export function stage2OverlayUrl(jobId, page) {
   return `/api/jobs/${jobId}/stage2/${page}/overlay`;
 }

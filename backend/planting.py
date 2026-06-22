@@ -192,6 +192,46 @@ def planting_count_rows(pdf: str, count_pages: list[int], schedule_page: int | N
     return rows, sched
 
 
+def label_positions(pdf: str, page: int, valid_codes: set | None = None) -> dict[str, list]:
+    """Plant code label centers (PDF points) per code on the page."""
+    doc = fitz.open(pdf)
+    words = doc[page].get_text("words")
+    doc.close()
+    vc = {v.upper() for v in valid_codes} if valid_codes else None
+    out: dict[str, list] = {}
+    for w in words:
+        t = w[4].strip().upper()
+        if _CODE_TOK.match(t) and (vc is None or t in vc):
+            out.setdefault(t, []).append(((w[0] + w[2]) / 2, (w[1] + w[3]) / 2))
+    return out
+
+
+def render_planting_overlay(pdf: str, page: int, sched: list[dict], out_path: str,
+                            dpi: int = 150) -> str:
+    """Render the plan with each plant label COLORED by species (automatic, during
+    extraction) — so a planting page shows colored plants like the human takeoff."""
+    import colorsys
+    from PIL import Image, ImageDraw
+    doc = fitz.open(pdf)
+    pg = doc[page]
+    pix = pg.get_pixmap(dpi=dpi)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGB")
+    W, H, pw, ph = pix.width, pix.height, pg.rect.width, pg.rect.height
+    doc.close()
+    count_codes = {s["code"] for s in sched if s["unit"] == "count"}
+    pos = label_positions(pdf, page, count_codes)
+    dr = ImageDraw.Draw(img, "RGBA")
+    r = max(7, int(W / 380))
+    for i, code in enumerate(sorted(pos)):
+        cr, cg, cb = colorsys.hsv_to_rgb((i * 0.137) % 1.0, 0.62, 0.92)
+        col = (int(cr * 255), int(cg * 255), int(cb * 255))
+        for (x, y) in pos[code]:
+            cx, cy = x / pw * W, y / ph * H
+            dr.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col + (170,), outline=col, width=2)
+    img.save(out_path)
+    return out_path
+
+
 def page_count_rows(pdf: str, page: int, sched: list[dict], api_key: str | None = None,
                     min_labels: int = 8) -> list[dict]:
     """Per-species count rows for ONE planting page, given the schedule. Gated on

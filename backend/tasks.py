@@ -169,7 +169,7 @@ def _has_material_tags(pdf, page: int, cfg: dict) -> bool:
     return len(tags) >= 2
 
 
-def _compute_takeoff(pdf, page: int, groups: list, scale: float) -> list:
+def _compute_takeoff(job_id, pdf, page: int, groups: list, scale: float) -> list:
     """Area + linear + count takeoff for the page. Reuses the engine's area totals
     and vision-reads the legend for the linear/count split (walls, trees, etc.).
     Best-effort: never let the takeoff extras break Stage 2."""
@@ -195,6 +195,12 @@ def _compute_takeoff(pdf, page: int, groups: list, scale: float) -> list:
             prows = planting.page_count_rows(str(pdf), page, sched)
         if prows:
             items = items + prows
+            # color the plants on the overlay automatically (during extraction)
+            try:
+                out = store.stage2_dir(job_id) / f"overlay_p{page}.png"
+                planting.render_planting_overlay(str(pdf), page, sched, str(out))
+            except Exception:  # noqa: BLE001
+                pass
         else:
             rows, _anns = visual_detect.count_takeoff_rows(str(pdf), page)
             items = items + rows
@@ -284,7 +290,7 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
                 comparison=legend_comparison(_open_page(pdf, page), groups),
                 validation=_build_validation(sid, res["areas"]),
             )
-            status["takeoff"] = _compute_takeoff(pdf, page, groups, res["scale_in_per_ft"])
+            status["takeoff"] = _compute_takeoff(job_id, pdf, page, groups, res["scale_in_per_ft"])
         else:
             # Fallback: existing color-grouping / label-seeding
             res = stage2.detect_color_regions(pdf, page, out)
@@ -297,7 +303,7 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
         # area+linear+count takeoff so walls/trees/counts show too.
         if status.get("status") == "done" and "takeoff" not in status:
             status["takeoff"] = _compute_takeoff(
-                pdf, page, status.get("groups", []),
+                job_id, pdf, page, status.get("groups", []),
                 status.get("scale_in_per_ft", 1.0 / 16))
     except Exception as exc:  # noqa: BLE001
         status.update(status="error", error=f"{type(exc).__name__}: {exc}")
