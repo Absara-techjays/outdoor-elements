@@ -16,9 +16,16 @@ from .stage2 import legend_comparison
 
 
 def _is_pool_plan(page) -> bool:
-    """Heuristic: a pool/spa PLAN sheet (where the pool body is drawn)."""
+    """True only for pool/spa SURFACE PLAN sheets — not piping, equipment, or detail sheets."""
     t = page.get_text().upper()
-    return ("POOL" in t) and ("PLAN" in t) and ("POOL SECTION" not in t[:200])
+    if not (("POOL" in t or "SPA" in t or "AQUATIC" in t) and "PLAN" in t):
+        return False
+    # Exclude sheets that show infrastructure or details, not plan-view surfaces
+    EXCLUDE = ("PIPING PLAN", "EQUIPMENT PLAN", "EQUIPMENT ROOM", "RETURN PIPING",
+               "SUPPLY PIPING", "POOL SECTION", "SPA SECTION", "HYDRO THERAPY",
+               "HYDROTHERA", "POOL DETAILS", "SPA DETAILS", "POOL DETAIL",
+               "SPA DETAIL", "CONSTRUCTION DETAILS")
+    return not any(kw in t for kw in EXCLUDE)
 
 
 def _persist_masks(job_id: str, page: int, masks: dict, scale: float, dpi: int = 150) -> None:

@@ -18,12 +18,11 @@ def test_detect_pool_returns_zones(tmp_path):
     from backend import pool_mode
     pdf = str(tmp_path / "pool.pdf")
     out_png = str(tmp_path / "overlay.png")
-    # pool ~200x150 pts at 150dpi; spa ~80x60 pts
+    # pool ~200x150 pts at 72dpi; spa ~80x60 pts
     _make_pool_pdf(pdf,
                    pool_rect=(50, 50, 250, 200),
                    spa_rect=(300, 50, 380, 110))
-    targets = {"POOL": 1.0, "SPA": 0.1}  # rough SF — just need match
-    result = pool_mode.detect_pool(pdf, 0, targets, out_png, dpi=72)
+    result = pool_mode.detect_pool(pdf, 0, out_png, dpi=72)
     assert "zones" in result
     zones = result["zones"]
     assert len(zones) >= 1
@@ -44,7 +43,7 @@ def test_detect_pool_overlay_exists(tmp_path):
     pdf = str(tmp_path / "pool.pdf")
     out_png = tmp_path / "overlay_p0.png"
     _make_pool_pdf(pdf, pool_rect=(50, 50, 250, 200), spa_rect=(300, 50, 380, 110))
-    pool_mode.detect_pool(pdf, 0, {"POOL": 1.0}, str(out_png), dpi=72)
+    pool_mode.detect_pool(pdf, 0, str(out_png), dpi=72)
     assert out_png.exists()
 
 
@@ -53,7 +52,7 @@ def test_detect_pool_zone_geometry_in_pdf_points(tmp_path):
     pdf = str(tmp_path / "pool.pdf")
     out_png = str(tmp_path / "overlay.png")
     _make_pool_pdf(pdf, pool_rect=(50, 50, 250, 200), spa_rect=(300, 50, 380, 110))
-    result = pool_mode.detect_pool(pdf, 0, {"POOL": 1.0}, out_png, dpi=72)
+    result = pool_mode.detect_pool(pdf, 0, out_png, dpi=72)
     for z in result["zones"]:
         for poly in z["geometry"]:
             for pt in poly:
