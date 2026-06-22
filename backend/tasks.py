@@ -239,14 +239,8 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
             # Pool mode: estimate-guided pool/spa surface detection (raw B&W pool
             # sheet, no tags). Scale auto-calibrated from the estimate targets.
             res = pool_mode.detect_pool(pdf, page, pool_targets, out, dpi=120)
-            store.replace_zones(job_id, page, [])  # pool path not zone-addressable yet
-            groups = [
-                {"label": s["name"], "sqft": s["area_sf"], "regions": 1,
-                 "perimeter_lf": s.get("perimeter_lf"),
-                 "hex": "#%02x%02x%02x" % pool_mode._SURFACE_COLOR.get(
-                     s["name"].upper(), pool_mode._DEFAULT_COLOR)}
-                for s in res["surfaces"]
-            ]
+            store.replace_zones(job_id, page, res.get("zones", []))
+            groups = zones.groups_from_zones(res.get("zones", []))
             status.update(
                 status="done", overlay=f"overlay_p{page}.png", method="pool",
                 scale_in_per_ft=res["scale_in_per_ft"],

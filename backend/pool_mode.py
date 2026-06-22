@@ -13,12 +13,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import uuid
+
 import cv2
-import fitz
 import numpy as np
-from PIL import Image
 
 from . import qto_engine
+from . import zones as zones_mod
 
 # distinct fill color per pool surface (RGB), echoing the human's QTO scheme
 _SURFACE_COLOR = {
@@ -79,37 +80,65 @@ def detect_pool(pdf_path, page_idx, targets: dict, out_png, dpi: int = 150,
         scale_in_per_ft = nominal_scale
     px_per_sf = (scale_in_per_ft * dpi) ** 2
 
+    pt_scale = 72.0 / dpi
+    page_h, page_w = binary.shape
+
+    zone_list: list[dict] = []
     surfaces = []
     for name, i, a in matched:
         mask = (labels == i).astype(np.uint8)
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         perim_px = sum(cv2.arcLength(c, True) for c in cnts)
+
+        # extract polygon geometry in PDF points
+        polys = []
+        for cnt in cnts:
+            simplified = cv2.approxPolyDP(cnt, 2.0, True)
+            if len(simplified) >= 3:
+                polys.append([
+                    [float(p[0][0]) * pt_scale, float(p[0][1]) * pt_scale]
+                    for p in simplified
+                ])
+
+        # normalized bounding box
+        x = int(stats[i, cv2.CC_STAT_LEFT])
+        y_top = int(stats[i, cv2.CC_STAT_TOP])
+        cw = int(stats[i, cv2.CC_STAT_WIDTH])
+        ch = int(stats[i, cv2.CC_STAT_HEIGHT])
+        bbox = [x / page_w, y_top / page_h,
+                (x + cw) / page_w, (y_top + ch) / page_h]
+
+        rgb = _SURFACE_COLOR.get(name.upper(), _DEFAULT_COLOR)
+        hex_color = "#%02x%02x%02x" % rgb
+        area_sf = round(a / px_per_sf, 1)
+        perim_lf = round(perim_px * (1.0 / dpi) / scale_in_per_ft, 1)
+
         surfaces.append({
             "name": name,
-            "area_sf": round(a / px_per_sf, 1),
-            "perimeter_lf": round(perim_px * (1.0 / dpi) / scale_in_per_ft, 1),
+            "area_sf": area_sf,
+            "perimeter_lf": perim_lf,
             "target_sf": float(targets[name]),
-            "_label": i,
         })
 
-    # colored overlay
-    doc = fitz.open(pdf_path)
-    pix = doc[page_idx].get_pixmap(dpi=dpi)
-    doc.close()
-    base = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].copy()
-    if base.shape[:2] != (h, w):
-        base = cv2.resize(base, (w, h))
-    over = base.copy()
-    for s in surfaces:
-        over[labels == s["_label"]] = _SURFACE_COLOR.get(s["name"].upper(), _DEFAULT_COLOR)
-    blended = cv2.addWeighted(base, 0.5, over, 0.5, 0)
-    if blended.shape[1] > 2200:
-        nh = int(blended.shape[0] * 2200 / blended.shape[1])
-        blended = cv2.resize(blended, (2200, nh))
-    out_png = Path(out_png)
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(blended).save(out_png)
+        if polys:
+            zone_list.append({
+                "id": uuid.uuid4().hex[:16],
+                "code": name,
+                "hex": hex_color,
+                "area_sqft": area_sf,
+                "perimeter_lf": perim_lf,
+                "geometry": polys,
+                "bbox": bbox,
+                "source": "pool",
+                "status": "active",
+            })
 
-    for s in surfaces:
-        s.pop("_label", None)
-    return {"surfaces": surfaces, "overlay": out_png.name, "scale_in_per_ft": scale_in_per_ft}
+    # render overlay via shared zones pipeline (consistent with landscape)
+    zones_mod.render_from_zones(str(pdf_path), page_idx, zone_list, Path(out_png), dpi=dpi)
+
+    return {
+        "surfaces": surfaces,
+        "overlay": Path(out_png).name,
+        "scale_in_per_ft": scale_in_per_ft,
+        "zones": zone_list,
+    }
