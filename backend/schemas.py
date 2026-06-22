@@ -8,6 +8,7 @@ class UploadResponse(BaseModel):
     job_id: str
     filename: str
     eager: bool  # True = ran inline (no Redis); False = dispatched to a worker
+    resumed: bool = False  # True = same PDF as before, resumed with its saved edits
 
 
 class PageInfo(BaseModel):

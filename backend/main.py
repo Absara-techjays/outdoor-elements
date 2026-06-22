@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 
 from pydantic import BaseModel
 
+import hashlib
 import os
 import secrets
 
@@ -81,9 +82,21 @@ async def upload(background: BackgroundTasks, file: UploadFile = File(...)) -> U
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a .pdf file.")
 
+    data = await file.read()
+    content_hash = hashlib.sha256(data).hexdigest()
+
+    # Same PDF uploaded before? Resume that job so its saved edits/deletions and
+    # already-computed pages/zones come back instead of starting from scratch.
+    existing = store.find_job_by_hash(content_hash)
+    if existing and store.pdf_path(existing).exists():
+        st = store.read_status(existing) or {}
+        return UploadResponse(job_id=existing, eager=EAGER, resumed=True,
+                              filename=st.get("filename") or file.filename)
+
     job_id = store.new_job_id()
-    store.pdf_path(job_id).write_bytes(await file.read())
+    store.pdf_path(job_id).write_bytes(data)
     store.write_status(job_id, {"job_id": job_id, "filename": file.filename, "status": "queued"})
+    store.set_content_hash(job_id, content_hash)
 
     # Dispatch Stage 1 (page selection) + Gemini auto-config WITHOUT blocking.
     # No Redis -> background threads; Redis up -> Celery workers.
@@ -152,14 +165,21 @@ def page_preview(job_id: str, index: int) -> FileResponse:
 
 # ---------- Stage 2: detect & color surface regions on a page ----------
 @app.post("/api/jobs/{job_id}/stage2/{page}")
-def start_stage2(job_id: str, page: int, background: BackgroundTasks) -> dict:
+def start_stage2(job_id: str, page: int, background: BackgroundTasks,
+                 force: bool = False) -> dict:
     if not store.pdf_path(job_id).exists():
         raise HTTPException(status_code=404, detail="Unknown job id.")
+    # Resume-safe: if this page was already detected (and possibly edited), do NOT
+    # re-detect — that would wipe the user's zone deletions. Return the saved
+    # result (the frontend polls GET). Pass ?force=true to deliberately re-detect.
+    existing = store.read_stage2(job_id, page)
+    if not force and existing and existing.get("status") == "done":
+        return {"job_id": job_id, "page": page, "eager": EAGER, "cached": True}
     store.write_stage2(job_id, page, {"job_id": job_id, "page": page, "status": "queued"})
     if EAGER:
-        background.add_task(run_stage2, job_id, page)
+        background.add_task(run_stage2, job_id, page, force)
     else:
-        stage2_detect.delay(job_id, page)
+        stage2_detect.delay(job_id, page, force)
     return {"job_id": job_id, "page": page, "eager": EAGER}
 
 

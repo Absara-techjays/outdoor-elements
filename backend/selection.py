@@ -31,15 +31,16 @@ KEEP_TITLE = [
     "MATERIAL PLAN", "MATERIALS PLAN", "HARDSCAPE PLAN",
     "PLANTING PLAN", "LANDSCAPE PLAN", "REFERENCE PLAN",
 ]
-# Other takeoff plan types (pool / spa / planter / paving). Often monochrome, so
-# these are kept on the title alone — no legend-color requirement.
+# Other landscape takeoff plan types kept on the title alone (often monochrome).
+# NOTE: pool/spa/aquatic are a SEPARATE trade — the human landscape QTO excludes
+# them (confirmed with the client on Alma: 10 sheets, not 11), so they are DROPPED.
 OTHER_PLAN_TITLE = [
-    "POOL PLAN", "SPA PLAN", "POOL & SPA", "POOL AND SPA", "AQUATIC",
-    "PLANTER PLAN", "PAVING PLAN", "PAVING & ",
+    "PLANTER PLAN", "PAVING PLAN", "PAVING & ", "SITE PLAN",
 ]
 DROP_TITLE = [
     "DETAIL", "SECTION", "ELEVATION", "GENERAL NOTES", "GRADING PLAN",
     "DRAINAGE PLAN", "LIGHTING PLAN", "IRRIGATION", "OVERALL", "KEY PLAN",
+    "POOL PLAN", "SPA PLAN", "POOL & SPA", "POOL AND SPA", "AQUATIC",
 ]
 
 _CODE_RE = re.compile(r"^[A-Z]{1,3}\d\.\d{1,2}$")
@@ -65,7 +66,7 @@ class PageResult:
         return asdict(self)
 
 
-def _corner_title(page: fitz.Page) -> str:
+def _corner_title_clip(page: fitz.Page) -> str:
     """Largest non-boilerplate, non-sheet-code text in the bottom-right corner."""
     r = page.rect
     clip = fitz.Rect(r.width * 0.85, r.height * 0.78, r.width, r.height)
@@ -86,6 +87,31 @@ def _corner_title(page: fitz.Page) -> str:
     txt = " ".join(s[3] for s in title)
     txt = re.sub(r"\b\d+FL\b", "", txt)          # strip floor prefix "38FL"
     return re.sub(r"\s+", " ", txt).strip().upper()
+
+
+def _title_fallback(page: fitz.Page) -> str:
+    """Whole-page title search — for firms whose title block sits outside the
+    bottom-right cropbox corner (e.g. a strip below page.rect, fy>1). The sheet
+    title is the largest text LINE that names a plan type."""
+    allkw = KEEP_TITLE + OTHER_PLAN_TITLE + DROP_TITLE
+    best_size, best = 0.0, ""
+    for b in page.get_text("dict")["blocks"]:
+        for line in b.get("lines", []):
+            txt = re.sub(r"\s+", " ",
+                         " ".join(s["text"] for s in line["spans"])).strip().upper()
+            if not txt or len(txt) > 40:
+                continue
+            if any(k in txt for k in allkw):
+                size = max((s["size"] for s in line["spans"]), default=0.0)
+                if size > best_size:
+                    best_size, best = size, txt
+    return best
+
+
+def _corner_title(page: fitz.Page) -> str:
+    """Sheet title — bottom-right corner first, else a whole-page font-size search
+    (handles title blocks outside the cropbox)."""
+    return _corner_title_clip(page) or _title_fallback(page)
 
 
 def _sheet_code(page: fitz.Page) -> str:
@@ -131,13 +157,14 @@ def classify_page(page: fitz.Page, index: int) -> PageResult:
     title_other = bool(other_kw) and not drop_kw
     colors = _legend_colors(page) if (title_landscape or title_other) else 0
 
-    # Landscape plans need a color legend (validated); pool/spa/planter plans are
-    # kept on the title alone (commonly monochrome engineering sheets).
-    keep = (title_landscape and colors >= MIN_LEGEND_COLORS) or title_other
+    # A takeoff-plan title is enough to keep. Raw plans are commonly MONOCHROME
+    # (B&W material/hardscape/planting sheets), which the line-width engine now
+    # reads — so we no longer require a color legend. Color is a bonus signal only.
+    keep = title_landscape or title_other
     pool_style = (not title) and not keep
 
     if keep and title_landscape:
-        reason = f"title '{title}' + {colors} legend colors"
+        reason = (f"title '{title}'" + (f" + {colors} legend colors" if colors else ""))
     elif keep and title_other:
         reason = f"title '{title}' (pool/spa/planter plan)"
     elif pool_style:
