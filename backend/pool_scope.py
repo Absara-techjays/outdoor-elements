@@ -14,10 +14,8 @@ import fitz
 
 
 def _extract_text(pdf_path: str | Path) -> str:
-    doc = fitz.open(str(pdf_path))
-    text = "\n".join(pg.get_text() for pg in doc)
-    doc.close()
-    return text
+    with fitz.open(str(pdf_path)) as doc:
+        return "\n".join(pg.get_text() for pg in doc)
 
 
 def _find_section(text: str, section_name: str) -> str | None:
