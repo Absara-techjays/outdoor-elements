@@ -532,7 +532,7 @@ export default function App({ onLogout }) {
                     <p className="hint">Measured by the per-material brain — walls/borders in linear feet, trees/benches/columns as counts.</p>
                     <ul className="surflist">
                       {s2.takeoff.filter((t) => t.unit !== "area" && t.quantity).map((t) => (
-                        <li key={t.code} className="zonerow">
+                        <li key={`${t.code}-${t.name}`} className="zonerow">
                           <span className={`unit-chip ${t.unit}`}>{t.unit === "linear" ? "LF" : "EA"}</span>
                           <code>{t.code}</code>
                           <span className="tk-name muted">{t.name}</span>

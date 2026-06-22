@@ -177,10 +177,19 @@ def _compute_takeoff(pdf, page: int, groups: list, scale: float) -> list:
         from . import takeoff
         area_by_code = {g["label"]: g.get("sqft", 0.0)
                         for g in (groups or []) if g.get("label")}
-        return takeoff.build_takeoff(str(pdf), page, use_vision=True,
-                                     scale_in_per_ft=scale, areas=area_by_code)
+        items = takeoff.build_takeoff(str(pdf), page, use_vision=True,
+                                      scale_in_per_ft=scale, areas=area_by_code)
     except Exception:  # noqa: BLE001
-        return []
+        items = []
+    # Phase 1 — visual counts: trees / pools / spas via gemini-3.1-pro-preview.
+    # The leader-arrow symbols the geometric engine can't count. Never fatal.
+    try:
+        from . import visual_detect
+        rows, _anns = visual_detect.count_takeoff_rows(str(pdf), page)
+        items = items + rows
+    except Exception:  # noqa: BLE001
+        pass
+    return items
 
 
 @shared_task(name="stage2_detect")

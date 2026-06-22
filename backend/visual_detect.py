@@ -105,3 +105,29 @@ def detect_annotations(pdf: str, page: int, api_key: str | None = None,
 def counts(annotations: list[dict]) -> dict:
     """Count of each count-type symbol (tree / pool / spa)."""
     return dict(Counter(a["type"] for a in annotations if a["type"] in COUNT_TYPES))
+
+
+_COUNT_NAMES = {"tree": "Trees", "pool": "Pools", "spa": "Spas"}
+
+
+def count_rows(annotations: list[dict]) -> list[dict]:
+    """Tree / pool / spa counts as Stage-2 takeoff rows (unit 'count', each).
+    Each row carries the symbol points so the overlay can mark them."""
+    c = counts(annotations)
+    rows = []
+    for t in ("tree", "pool", "spa"):
+        if c.get(t):
+            rows.append({
+                "code": "", "name": _COUNT_NAMES[t], "unit": "count",
+                "detect": "symbol", "quantity": c[t], "unit_label": "each",
+                "source": "visual",
+                "points": [a["pt"] for a in annotations if a["type"] == t],
+            })
+    return rows
+
+
+def count_takeoff_rows(pdf: str, page: int, api_key: str | None = None,
+                       dpi: int = 150) -> tuple[list[dict], list[dict]]:
+    """Vision-detect a page and return (count rows, all annotations)."""
+    anns = detect_annotations(pdf, page, api_key, dpi)
+    return count_rows(anns), anns

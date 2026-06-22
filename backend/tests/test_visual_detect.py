@@ -37,3 +37,20 @@ def test_counts_only_count_types():
 def test_empty_or_unparseable_reply():
     assert vd.parse_annotations("no json here", 100, 100) == []
     assert vd.parse_annotations("", 100, 100) == []
+
+
+def test_count_rows_build_takeoff_rows():
+    anns = [
+        {"type": "material", "code": "M.5", "pt": [10, 20]},
+        {"type": "tree", "code": "", "pt": [1, 2]},
+        {"type": "tree", "code": "", "pt": [3, 4]},
+        {"type": "tree", "code": "", "pt": [5, 6]},
+        {"type": "spa", "code": "", "pt": [7, 8]},
+    ]
+    rows = vd.count_rows(anns)
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["Trees"]["quantity"] == 3
+    assert by_name["Trees"]["unit"] == "count" and by_name["Trees"]["unit_label"] == "each"
+    assert len(by_name["Trees"]["points"]) == 3        # symbol points carried for the overlay
+    assert by_name["Spas"]["quantity"] == 1
+    assert "Pools" not in by_name                       # none detected -> no row
